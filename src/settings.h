@@ -167,6 +167,7 @@ int st_profile_path(const char *root, const char *name, char *out, size_t cap);
 int st_profile_save(const char *root, const StProfile *p);     /* uses p->name; not atomic (3.3) */
 int st_profile_load(const char *root, const char *name, StProfile *out);
 int st_profile_exists(const char *root, const char *name);     /* directory holds anything */
+int st_profile_presence(const char *root, const char *name);   /* OK present, NOTFOUND confirmed absent, IO unknown */
 int st_profile_delete(const char *root, const char *name);
 int st_profiles_exist(const char *root);                       /* root holds anything besides . .. */
 

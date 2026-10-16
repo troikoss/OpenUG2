@@ -73,7 +73,7 @@ void cx_init(CxInput *c) {
         if (lrc != ST_OK) {
             /* Defaults stand in for the session, but the file is only ever created when it is genuinely absent:
              * a corrupt, incompatible or unreadable profile is preserved (its pad bindings are not saved). */
-            c->profile_writable = c->have_root && !st_profile_exists(c->profile_root, CS_PROFILE_NAME);
+            c->profile_writable = c->have_root && st_profile_presence(c->profile_root, CS_PROFILE_NAME) == ST_E_NOTFOUND;
             memset(c->profile, 0, sizeof *c->profile);
             st_profile_defaults(c->profile, 0);
             snprintf(c->profile->name, sizeof c->profile->name, "%s", CS_PROFILE_NAME);

@@ -556,6 +556,42 @@ int st_profile_exists(const char *root, const char *name) {
     return dir_path(root, name, dir, sizeof dir) == ST_OK && dir_nonempty(dir);
 }
 
+/* Distinguishes a confirmed absence from a failure to look: only a missing directory, or one that enumerates
+ * cleanly to nothing, is NOTFOUND. Open, permission and mid-enumeration errors are ST_E_IO. */
+int st_profile_presence(const char *root, const char *name) {
+    char dir[1024];
+    int rc = dir_path(root, name, dir, sizeof dir);
+    if (rc != ST_OK) return rc;
+    int found = 0;
+#ifdef _WIN32
+    char pat[1024];
+    WIN32_FIND_DATAA fd;
+    if (snprintf(pat, sizeof pat, "%s\\*", dir) >= (int)sizeof pat) return ST_E_IO;
+    HANDLE h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError();
+        return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ? ST_E_NOTFOUND : ST_E_IO;
+    }
+    do {
+        if (strcmp(fd.cFileName, ".") && strcmp(fd.cFileName, "..")) found = 1;
+    } while (!found && FindNextFileA(h, &fd));
+    DWORD e = GetLastError();
+    FindClose(h);
+    if (!found && e != ERROR_NO_MORE_FILES) return ST_E_IO;
+#else
+    DIR *d = opendir(dir);
+    if (!d) return errno == ENOENT ? ST_E_NOTFOUND : ST_E_IO;
+    struct dirent *e;
+    errno = 0;
+    while (!found && (e = readdir(d)) != NULL)
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) found = 1;
+    int err = !found && errno != 0;
+    closedir(d);
+    if (err) return ST_E_IO;
+#endif
+    return found ? ST_OK : ST_E_NOTFOUND;
+}
+
 int st_profiles_exist(const char *root) { return root && dir_nonempty(root); }
 
 typedef struct { const char *dir; int rc; } DelCtx;

@@ -8,6 +8,10 @@
 #include <string.h>
 
 #include <SDL.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include "controls_sdl.h"
 #include "controls_store.h"
@@ -182,6 +186,32 @@ int main(void) {
         CHECK(pf != NULL, "profile file now exists");
         if (pf) fclose(pf);
     }
+#ifndef _WIN32
+    /* review 2 (round 2): a valid profile survives a temporarily unreadable profile directory */
+    if (geteuid() != 0) {
+        char pdir[1100], proot[1024];
+        snprintf(proot, sizeof proot, "%s", c->profile_root);
+        snprintf(pdir, sizeof pdir, "%s/OPENUG2", proot);
+        cx_shutdown(c);
+        memset(c, 0, sizeof *c);
+        cx_init(c);
+        c->profile->career_difficulty = 1;
+        CHECK(cx_save(c) == 0, "valid profile with difficulty 1 saved");
+        cx_shutdown(c);
+        memset(c, 0, sizeof *c);
+        CHECK(chmod(pdir, 0) == 0, "profile directory made unreadable");
+        CHECK(st_profile_presence(proot, "OPENUG2") == ST_E_IO, "an unreadable directory is not a confirmed absence");
+        cx_init(c);
+        chmod(pdir, 0700);
+        CHECK(!c->profile_writable, "profile writes stay disabled when absence could not be established");
+        cb_kb_capture(&c->b.kb, CB_ACT_HUD, 0, SDL_SCANCODE_I);
+        CHECK(cx_save(c) != 0, "pad bindings are not saved");
+        StProfile *chk = (StProfile *)calloc(1, sizeof *chk);
+        CHECK(st_profile_load(proot, "OPENUG2", chk) == ST_OK && chk->career_difficulty == 1, "the valid profile is unchanged");
+        free(chk);
+        CHECK(st_profile_presence(proot, "OPENUG2") == ST_OK, "present once readable again");
+    }
+#endif
     vp = find_virtual(c);
     if (vp < 0) vp = 0;
     j = c->joy[vp];
