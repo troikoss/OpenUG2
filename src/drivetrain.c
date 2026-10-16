@@ -30,26 +30,36 @@ float drv_curve_knot_rpm(float a, float b, int q, int i) {
 int drv_car_finalize(DrvCar *car) {
     if (car->gear_count < 1 || car->gear_count > DRV_MAX_FORWARD) return -1;
     if (!(car->engine_inertia > 0.0f) || !(car->mass > 0.0f)) return -1;
+    if (!isfinite(car->idle_rpm) || !isfinite(car->shift_rpm) || !isfinite(car->max_rpm)) return -1;
     if (!(car->max_rpm > car->idle_rpm)) return -1;
     for (int i = 0; i < 4; i++) if (!(car->wheel_radius[i] > 0.0f)) return -1;
 
-    for (int j = 0; j < DRV_TORQUE_SAMPLES; j++)
-        car->torque[j] = car->torque_primary[j] + car->torque_secondary[j];   /* binary32 sum */
-    car->drive_class = drv_drive_class(car->rear_share);
-    car->launch_scale = drv_launch_scale(car->drive_class);
-
-    const int n = car->gear_count;
-    const double e0 = car->idle_rpm, e1 = car->shift_rpm, e2 = car->max_rpm;
-    memset(car->up_rpm, 0, sizeof car->up_rpm);
-    memset(car->down_rpm, 0, sizeof car->down_rpm);
-    car->up_rpm[1] = (float)((e0 + (e1 - e0) * (double)car->launch_fraction) * (double)car->launch_scale);
-    for (int j = 2; j <= n; j++) {
-        car->up_rpm[j] = (float)(e1 - 100.0);
-        const double rj = car->ratio[j];
-        car->down_rpm[j + 1] = fabs(rj) <= 1e-5 ? 0.0f
-            : car->up_rpm[j] * (car->ratio[j + 1] / car->ratio[j]);   /* Reference rounding convention only; see S1-4.2 / U-14. */
+    /* Derive into a scratch copy and commit only when every derived value is
+     * finite, so a rejected record leaves the caller's car untouched. */
+    DrvCar t = *car;
+    for (int j = 0; j < DRV_TORQUE_SAMPLES; j++) {
+        t.torque[j] = t.torque_primary[j] + t.torque_secondary[j];   /* binary32 sum */
+        if (!isfinite(t.torque[j])) return -1;
     }
-    car->up_rpm[n + 1] = (float)(e2 + 500.0);
+    t.drive_class = drv_drive_class(t.rear_share);
+    t.launch_scale = drv_launch_scale(t.drive_class);
+
+    const int n = t.gear_count;
+    const double e0 = t.idle_rpm, e1 = t.shift_rpm, e2 = t.max_rpm;
+    memset(t.up_rpm, 0, sizeof t.up_rpm);
+    memset(t.down_rpm, 0, sizeof t.down_rpm);
+    t.up_rpm[1] = (float)((e0 + (e1 - e0) * (double)t.launch_fraction) * (double)t.launch_scale);
+    for (int j = 2; j <= n; j++) {
+        t.up_rpm[j] = (float)(e1 - 100.0);
+        const double rj = t.ratio[j];
+        t.down_rpm[j + 1] = fabs(rj) <= 1e-5 ? 0.0f
+            : t.up_rpm[j] * (t.ratio[j + 1] / t.ratio[j]);   /* Reference rounding convention only; see S1-4.2 / U-14. */
+    }
+    t.up_rpm[n + 1] = (float)(e2 + 500.0);
+    for (int j = 0; j < DRV_TABLE_SLOTS; j++)
+        if (!isfinite(t.up_rpm[j]) || !isfinite(t.down_rpm[j])) return -1;
+    if (!isfinite(t.launch_scale)) return -1;
+    *car = t;
     return 0;
 }
 
@@ -93,9 +103,9 @@ int drv_substep_count(float frame_dt, float *h) {
 /* S1-3.1 */
 double drv_curve(const float *s, int q, double a, double b, double x) {
     double p = (x - a) * (double)(q - 1) / (b - a);
-    int i = (int)p;                              /* truncation toward zero */
-    if (p < 0.0 || i < 0) return s[0];
-    if (i >= q - 1) return s[q - 1];
+    if (isnan(p) || p < 0.0) return s[0];        /* also guards the integer conversion */
+    if (p >= (double)(q - 1)) return s[q - 1];
+    int i = (int)p;                              /* truncation toward zero, 0 <= p < q-1 */
     double f = p - (double)i;
     return f * (double)s[i + 1] + (1.0 - f) * (double)s[i];
 }
@@ -178,9 +188,10 @@ static void engine_post(Drivetrain *d);
 static void clutch_post(Drivetrain *d);
 
 int drv_init(Drivetrain *d, const DrvCar *car, const DrvTune *tune) {
+    DrvCar fc = *car;
+    if (drv_car_finalize(&fc) != 0) return -1;     /* *d is untouched on rejection */
     memset(d, 0, sizeof *d);
-    d->car = *car;
-    if (drv_car_finalize(&d->car) != 0) return -1;
+    d->car = fc;
     if (tune) d->tune = *tune; else drv_tune_default(&d->tune);
     if (!(d->tune.rate_scale > 0.0f)) d->tune.rate_scale = 1.0f;
 

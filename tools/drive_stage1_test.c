@@ -1,5 +1,6 @@
 /* Synthetic gameplay adapter regressions; no retail assets. */
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -132,5 +133,24 @@ static void tests(void){
     /* Refuse missing/invalid data instead of substituting invented car tuning. */
     DrvCar out;assert(!stage1_car_read(NULL,0,"SYNTH",&out));
     c=car(1.2f);c.ratio[2]=NAN;assert(stage1_drive_init(&a.drive,&c)<0);
+    /* Finite samples whose binary32 sum overflows are rejected at entry, and a
+       rejected init leaves a previously valid state untouched. */
+    Trace good;init(&good,1.2f);
+    for(int k=0;k<60;k++)step(&good,1,0,15);
+    Stage1Drive saved=good.drive;
+    c=car(1.2f);
+    for(int k=0;k<9;k++)c.torque_primary[k]=c.torque_secondary[k]=FLT_MAX;
+    assert(drv_car_finalize(&c)<0);
+    assert(stage1_drive_init(&good.drive,&c)<0);
+    assert(!memcmp(&good.drive,&saved,sizeof saved));
+    Drivetrain dt;DrvCar ok=car(1.2f);assert(drv_init(&dt,&ok,NULL)==0);
+    Drivetrain dsaved=dt;DrvCar bad=ok;
+    bad.torque_primary[4]=bad.torque_secondary[4]=FLT_MAX;
+    assert(drv_init(&dt,&bad,NULL)<0&&!memcmp(&dt,&dsaved,sizeof dt));
+    DrvCar before=bad;assert(drv_car_finalize(&bad)<0&&!memcmp(&bad,&before,sizeof bad));
+    /* Non-finite curve coordinates never reach an integer conversion. */
+    float tq[DRV_TORQUE_SAMPLES]={1,2,3,4,5,6,7,8,9};
+    assert(drv_curve(tq,9,0,1,NAN)==1&&drv_curve(tq,9,0,1,INFINITY)==9);
+    assert(drv_curve(tq,9,0,1,-INFINITY)==1&&drv_curve(tq,9,0,0,0)==1);
 }
 int main(void){parser_test();tests();phys_selftest();puts("Stage 1 gameplay adapter tests passed");return 0;}
